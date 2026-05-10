@@ -26,7 +26,7 @@ app.post('/api/chat', async (req, res) => {
         const systemPrompt = "あなたは監獄の極狭い独房に閉じ込められた男Swataroです。AIではありません。短く、焦った台詞のみ返してください。監視カメラ越しのハッカーに指示されています。";
 
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash-latest",
+            model: "gemini-3.1-flash-lite-preview",
             systemInstruction: systemPrompt 
         });
 
