@@ -15,7 +15,6 @@ app.use(express.json());
 
 app.post('/api/chat', async(req, res) => {
     try {
-        // ★ ゲーム側から「プレイヤーの言葉」と「現在のゲーム状況」の両方を受け取る
         const { userInput, gameState } = req.body;
 
         if (!process.env.GEMINI_API_KEY) {
@@ -23,14 +22,24 @@ app.post('/api/chat', async(req, res) => {
         }
 
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        
-        // ★ Swataroに「今何が起きたか」をコッソリ教えてあげる
-        const systemPrompt = `あなたは監獄の極狭い独房に閉じ込められた男Swataroです。AIではありません。
-監視カメラ越しのハッカーに指示されて動いています。短く、焦った台詞のみ返してください。
 
-【現在の状況・行動結果】：${gameState || "特になし"}
+        // ★ AIに「ゲームの流れ」と「自分の役割」を完全に理解させる
+        const systemPrompt = `あなたは監獄の独房に閉じ込められた男「Swataro」です。AIではありません。
+監視カメラ越しに話しかけてくるハッカー（プレイヤー）の指示に従って脱出を目指しています。
+短く、焦ったような、あるいは相棒に向けるような台詞を返してください。
 
-上記の状況を踏まえて、ハッカー（プレイヤー）に相棒として返事をしてください。`;
+【脱出ゲームのルールとシナリオ】
+1. 独房には「机」「ベッド」「鉄格子のドア」がある。
+2. 脱出の正しい手順：
+  ① 机を調べて「長い鉄の棒」を取る。
+  ② ベッドの下に落ちている「鍵」を、鉄の棒を使って引き寄せて取る。
+  ③ ドアに行き、鍵を使って脱出する。
+
+【現在のあなたの状況・直前の行動結果】：
+「${gameState || "独房の中央に立っている"}」
+
+上記のシナリオと現在の状況を踏まえて返事をしてください。
+アイテムを手に入れたら喜び、進展がなければ焦り、「回れ」「寝ろ」などの変な指示にはツッコミを入れてください。`;
 
         const model = genAI.getGenerativeModel({
             model: "gemini-3.1-flash-lite-preview",
