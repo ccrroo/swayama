@@ -1,11 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-require('dotenv').config(); // .envファイルからAPIキーを読み込む魔法
+require('dotenv').config();
 
 const app = express();
 
-// どのサイトからの通信も許可する（エラー防止）
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
@@ -14,35 +13,37 @@ app.use(cors({
 
 app.use(express.json());
 
-// Google AIの準備 (.envのキーを使用)
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// ゲーム側から通信を受け取る窓口
-app.post('/api/chat', async(req, res) => {
-    const { userInput } = req.body;
-
-    // Swataroの人格設定
-    const systemPrompt = "あなたは監獄の極狭い独房に閉じ込められた男Swataroです。AIではありません。短く、焦った台詞のみ返してください。監視カメラ越しのハッカーに指示されています。";
-
+app.post('/api/chat', async (req, res) => {
     try {
-        const model = genAI.getGenerativeModel({
+        const { userInput } = req.body;
+        
+        // ① APIキーがRenderに設定されているかチェック
+        if (!process.env.GEMINI_API_KEY) {
+            throw new Error("Renderの「Environment Variables」に GEMINI_API_KEY が設定されていません！");
+        }
+
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const systemPrompt = "あなたは監獄の極狭い独房に閉じ込められた男Swataroです。AIではありません。短く、焦った台詞のみ返してください。監視カメラ越しのハッカーに指示されています。";
+
+        const model = genAI.getGenerativeModel({ 
             model: "gemini-1.5-flash",
-            systemInstruction: systemPrompt
+            systemInstruction: systemPrompt 
         });
 
-        // AIに考えさせる
+        // ② Geminiへ送信
         const result = await model.generateContent(userInput);
         const reply = result.response.text();
 
-        // 成功したらゲーム側に返す
+        // 成功したら返す
         res.json({ reply: reply });
+
     } catch (error) {
-        console.error("AI Error:", error);
-        res.status(500).json({ error: error.message });
+        // ③ 何が原因で爆発したか、詳細なエラーをフロントエンドに返す
+        console.error("🔥 Server Error:", error.message);
+        res.status(500).json({ error: `サーバー内部エラー: ${error.message}` });
     }
 });
 
-// サーバー起動
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Swa-Zero Server is running on port ${PORT}`);
