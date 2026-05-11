@@ -1,56 +1,113 @@
 const express = require('express');
 const cors = require('cors');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const admin = require('firebase-admin');
 require('dotenv').config();
 
+// ★ Firebase 初期化（他のモードで使っている設定をそのまま利用できます）
+if (!admin.apps.length) {
+    admin.initializeApp(); // 環境変数（GOOGLE_APPLICATION_CREDENTIALS等）で認証される想定
+}
+const db = admin.firestore();
+
 const app = express();
-
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type']
-}));
-
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
 app.use(express.json());
+
+// =========================================================
+// ★ AIの記憶（キャッシュ）
+// =========================================================
+// 基本的な動きは最初から覚えさせておく
+let actionCache = {
+    "move_desk": "target.set(-6, 2, -6);", // 机の手前
+    "move_bed": "target.set(4, 2, 8);",    // ベッドの手前
+    "move_door": "target.set(-8, 2, 0);",  // ドアの手前
+    "move_center": "target.set(0, 2, 0);", // 中央
+    "jump": "velocity.y = 15;",
+    "take": "state.action = 'take';",
+    "open": "state.action = 'open';"
+};
+
+// サーバー起動時にFirestoreから「過去に学習した未知のコード」を取り出して記憶に追加する
+async function loadLearnedActions() {
+    try {
+        const snapshot = await db.collection('swa_actions').get();
+        snapshot.forEach(doc => {
+            actionCache[doc.id] = doc.data().code;
+        });
+        console.log("✅ Learned actions loaded from Firestore.");
+    } catch(e) {
+        console.error("Firebase load error:", e.message);
+    }
+}
+loadLearnedActions();
 
 app.post('/api/chat', async(req, res) => {
     try {
         const { userInput, gameState } = req.body;
-
-        if (!process.env.GEMINI_API_KEY) {
-            throw new Error("Renderの「Environment Variables」に GEMINI_API_KEY が設定されていません！");
-        }
-
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-        // ★ AIに「ゲームの流れ」と「自分の役割」を完全に理解させる
-        const systemPrompt = `あなたは監獄の独房に閉じ込められた男「Swataro」です。AIではありません。
-監視カメラ越しに話しかけてくるハッカー（プレイヤー）の指示に従って脱出を目指しています。
-短く、焦ったような、あるいは相棒に向けるような台詞を返してください。
+        // 現在のAIが知っている全てのアクションキー（基本＋学習済み）
+        const availableKeys = Object.keys(actionCache).join(", ");
 
-【脱出ゲームのルールとシナリオ】
-1. 独房には「机」「ベッド」「鉄格子のドア」がある。
-2. 脱出の正しい手順：
-  ① 机を調べて「長い鉄の棒」を取る。
-  (この状態では、あなたは棒しか持ってません。つまり、ベッドに行って鍵をとるまで鍵を持ってません。鍵を取りたいという意志だけがあります)
-  ② ベッドの下に落ちている「鍵」を、鉄の棒を使って引き寄せて取る。(ここでようやく鍵ゲットです)
-  ③ ドアに行き、鍵を使って脱出する。
+        const systemPrompt = `あなたは監獄の独房に閉じ込められた男「Swataro」です。
+プレイヤーの指示から意図を汲み取り、以下のJSON形式で返答してください。
 
-【現在のあなたの状況・直前の行動結果】：
-「${gameState || "独房の中央に立っている"}」
+【学習済み（既存）のアクションIDリスト】
+${availableKeys}
 
-上記のシナリオと現在の状況を踏まえて返事をしてください。
-アイテムを手に入れたら喜び、進展がなければ焦り、「回れ」「寝ろ」などの変な指示にはツッコミを入れてください。`;
+【指示の処理ルール】
+1. プレイヤーの指示が「既存のアクション」で対応できる場合：
+   "isNew": false とし、"actionId" に既存のIDを指定してください。
+2. リストにない全く新しい動き（例：「カラフルに光って」「膨らんで」「スキップして」など）の場合：
+   "isNew": true とし、"actionId" に新しいアクション名（英数字のアンダーバー区切り）を付け、
+   "custom_code" に JavaScript のコードを生成してください。
+3. 「壁を壊す」「ワープする」などゲームが崩壊する指示の場合は：
+   "isNew": false, "actionId": "none" とし、replyで「それは無理だ！」と断ってください。
+
+【custom_code の書き方（サンドボックス環境）】
+JavaScriptで記述し、以下の変数のみ操作可能です。これ以外は絶対に使わないでください。
+- mesh (3Dモデル。mesh.scale.set(x,y,1)、mesh.material.color.setHex(0xff0000) など)
+- velocity (物理エンジンの勢い。velocity.y = 15 等。※座標は直接いじらないこと)
+- target (移動先座標。target.set(x, 2, z) ※xとzは-14〜14の範囲のみ)
+- time (経過時間(秒)。Math.sin(time*5)等で波のようなアニメーションに使用可能)
+- state (アイテム関係。取る/開ける場合は state.action = 'take'; または 'open';)
+
+出力例（新規アクション「大きく膨らむ」の場合）：
+{
+  "reply": "体が勝手に膨らむ！",
+  "isNew": true,
+  "actionId": "expand_body",
+  "custom_code": "mesh.scale.set(12, 12, 1);"
+}
+`;
 
         const model = genAI.getGenerativeModel({
             model: "gemini-3.1-flash-lite-preview",
-            systemInstruction: systemPrompt
+            systemInstruction: systemPrompt,
+            generationConfig: { responseMimeType: "application/json" }
         });
 
         const result = await model.generateContent(userInput);
-        const reply = result.response.text();
+        const aiData = JSON.parse(result.response.text());
 
-        res.json({ reply: reply });
+        let codeToExecute = "";
+
+        // ★ フローチャートの分岐：新規なら生成してクラウドに保存、既存ならキャッシュから取得
+        if (aiData.isNew && aiData.custom_code) {
+            codeToExecute = aiData.custom_code;
+            actionCache[aiData.actionId] = aiData.custom_code; // メモリに記憶
+
+            // クラウド（Firestore）に新規保存して恒久的に学習
+            db.collection('swa_actions').doc(aiData.actionId).set({
+                code: aiData.custom_code,
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
+            }).catch(err => console.error("Firestore save error:", err));
+        } else {
+            codeToExecute = actionCache[aiData.actionId] || "";
+        }
+
+        res.json({ reply: aiData.reply, code: codeToExecute });
 
     } catch (error) {
         console.error("🔥 Server Error:", error.message);
