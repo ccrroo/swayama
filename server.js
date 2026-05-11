@@ -10,7 +10,6 @@ app.use(express.json());
 
 // =========================================================
 // ★ AIの記憶（キャッシュ）と MongoDB の連携
-// ※ジャンプなどが毎フレーム実行されないよう「state.done」で1回限りに修正
 // =========================================================
 let actionCache = {
     "move_desk": "if(!state.done){ target.set(-6, 2, -6); state.done=true; }",
@@ -32,8 +31,8 @@ async function connectDB() {
     const client = new MongoClient(process.env.MONGODB_URI);
     try {
         await client.connect();
-        db = client.db('swazero'); 
-        actionsCollection = db.collection('swa_actions'); 
+        db = client.db('swazero');
+        actionsCollection = db.collection('swa_actions');
         console.log("✅ MongoDB Connected!");
 
         const learnedActions = await actionsCollection.find({}).toArray();
@@ -54,6 +53,7 @@ app.post('/api/chat', async(req, res) => {
 
         const availableKeys = Object.keys(actionCache).join(", ");
 
+        // ★ AIにデフォルトサイズと「余計なことをしない」ルールを徹底させる
         const systemPrompt = `あなたは監獄の独房に閉じ込められた男の子「Swataro」です。
 プレイヤーの指示から意図を汲み取り、以下のJSON形式で返答してください。
 
@@ -71,11 +71,13 @@ ${availableKeys}
 3. 「壁を壊す」「外に出る」などゲームが崩壊する指示の場合は：
    "isNew": false, "actionId": "none" とし、replyで「それは無理だ！」と断ってください。
 
-【custom_code の書き方（最重要）】
+【custom_code の書き方（最重要ルール）】
 コードはゲーム内で「毎フレーム（1秒間に60回）」実行されます。
 - ジャンプ(velocity.y)や移動先(target)の設定など、「1回だけでいい動作」は必ず以下のように書いてください。
   例: if(!state.done){ velocity.y = 15; state.done = true; }
 - 大きさが脈打つなど「継続するアニメーション」は Math.sin(time) などをそのまま書いてOKです。
+- ★重要: Swataroのデフォルトの大きさは mesh.scale.set(7, 7, 1); です。大きさを変更する場合は「7」を基準に計算してください。（例：膨らむなら mesh.scale.set(7 + Math.sin(time)*3, 7 + Math.sin(time)*3, 1) ）
+- ★重要: プレイヤーから指示されたパラメータ（色だけ、ジャンプだけ等）のみを変更してください。指示されていないパラメータは絶対にコードに含めず、デフォルトのままにしてください。
 - 操作可能な変数: mesh, velocity, target, time, state
 
 出力例（新規アクション「大きく膨らむ」の場合）：
@@ -83,7 +85,7 @@ ${availableKeys}
   "reply": "体が勝手に膨らむ！",
   "isNew": true,
   "actionId": "expand_body",
-  "custom_code": "mesh.scale.set(12, 12, 1);"
+  "custom_code": "mesh.scale.set(14, 14, 1);" // デフォルト(7,7,1)の2倍にする
 }
 `;
 
@@ -100,14 +102,10 @@ ${availableKeys}
 
         if (aiData.isNew && aiData.custom_code) {
             codeToExecute = aiData.custom_code;
-            actionCache[aiData.actionId] = aiData.custom_code; 
+            actionCache[aiData.actionId] = aiData.custom_code;
 
             if (actionsCollection) {
-                actionsCollection.updateOne(
-                    { _id: aiData.actionId }, 
-                    { $set: { code: aiData.custom_code, createdAt: new Date() } }, 
-                    { upsert: true }
-                ).catch(err => console.error("MongoDB save error:", err));
+                actionsCollection.updateOne({ _id: aiData.actionId }, { $set: { code: aiData.custom_code, createdAt: new Date() } }, { upsert: true }).catch(err => console.error("MongoDB save error:", err));
             }
         } else {
             codeToExecute = actionCache[aiData.actionId] || "";
