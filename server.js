@@ -1,56 +1,64 @@
 const express = require('express');
 const cors = require('cors');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const admin = require('firebase-admin');
+const { MongoClient } = require('mongodb');
 require('dotenv').config();
-
-// ★ Firebase 初期化（他のモードで使っている設定をそのまま利用できます）
-if (!admin.apps.length) {
-    admin.initializeApp(); // 環境変数（GOOGLE_APPLICATION_CREDENTIALS等）で認証される想定
-}
-const db = admin.firestore();
 
 const app = express();
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
 app.use(express.json());
 
 // =========================================================
-// ★ AIの記憶（キャッシュ）
+// ★ AIの記憶（キャッシュ）と MongoDB の連携
 // =========================================================
-// 基本的な動きは最初から覚えさせておく
 let actionCache = {
-    "move_desk": "target.set(-6, 2, -6);", // 机の手前
-    "move_bed": "target.set(4, 2, 8);",    // ベッドの手前
-    "move_door": "target.set(-8, 2, 0);",  // ドアの手前
-    "move_center": "target.set(0, 2, 0);", // 中央
+    "move_desk": "target.set(-6, 2, -6);", 
+    "move_bed": "target.set(4, 2, 8);",    
+    "move_door": "target.set(-8, 2, 0);",  
+    "move_center": "target.set(0, 2, 0);", 
     "jump": "velocity.y = 15;",
     "take": "state.action = 'take';",
     "open": "state.action = 'open';"
 };
 
-// サーバー起動時にFirestoreから「過去に学習した未知のコード」を取り出して記憶に追加する
-async function loadLearnedActions() {
+let db, actionsCollection;
+
+// MongoDBに接続する準備
+async function connectDB() {
+    if (!process.env.MONGODB_URI) {
+        console.error("🔥 MONGODB_URIが設定されていません！");
+        return;
+    }
+    const client = new MongoClient(process.env.MONGODB_URI);
     try {
-        const snapshot = await db.collection('swa_actions').get();
-        snapshot.forEach(doc => {
-            actionCache[doc.id] = doc.data().code;
+        await client.connect();
+        db = client.db('swazero'); // データベース名
+        actionsCollection = db.collection('swa_actions'); // コレクション名
+        console.log("✅ MongoDB Connected!");
+        
+        // サーバー起動時にクラウドから学習済みアクションを読み込む
+        const learnedActions = await actionsCollection.find({}).toArray();
+        learnedActions.forEach(doc => {
+            actionCache[doc._id] = doc.code;
         });
-        console.log("✅ Learned actions loaded from Firestore.");
-    } catch(e) {
-        console.error("Firebase load error:", e.message);
+        console.log(`✅ Loaded ${learnedActions.length} learned actions from MongoDB.`);
+    } catch (e) {
+        console.error("MongoDB Connection Error:", e.message);
     }
 }
-loadLearnedActions();
+connectDB();
 
+// =========================================================
+// ★ AIによる指示の解読とコード生成
+// =========================================================
 app.post('/api/chat', async(req, res) => {
     try {
         const { userInput, gameState } = req.body;
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-        // 現在のAIが知っている全てのアクションキー（基本＋学習済み）
         const availableKeys = Object.keys(actionCache).join(", ");
 
-        const systemPrompt = `あなたは監獄の独房に閉じ込められた男「Swataro」です。
+        const systemPrompt = `あなたは監獄の独房に閉じ込められた男の子「Swataro」です。
 プレイヤーの指示から意図を汲み取り、以下のJSON形式で返答してください。
 
 【学習済み（既存）のアクションIDリスト】
@@ -98,11 +106,14 @@ JavaScriptで記述し、以下の変数のみ操作可能です。これ以外�
             codeToExecute = aiData.custom_code;
             actionCache[aiData.actionId] = aiData.custom_code; // メモリに記憶
 
-            // クラウド（Firestore）に新規保存して恒久的に学習
-            db.collection('swa_actions').doc(aiData.actionId).set({
-                code: aiData.custom_code,
-                createdAt: admin.firestore.FieldValue.serverTimestamp()
-            }).catch(err => console.error("Firestore save error:", err));
+            // クラウド（MongoDB）に新規保存して恒久的に学習
+            if (actionsCollection) {
+                actionsCollection.updateOne(
+                    { _id: aiData.actionId },
+                    { $set: { code: aiData.custom_code, createdAt: new Date() } },
+                    { upsert: true }
+                ).catch(err => console.error("MongoDB save error:", err));
+            }
         } else {
             codeToExecute = actionCache[aiData.actionId] || "";
         }
