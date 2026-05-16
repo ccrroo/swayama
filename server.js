@@ -65,11 +65,19 @@ ${availableKeys}
 【指示の処理ルール】
 1. プレイヤーの指示が「既存のアクション」で対応できる場合：
    "isNew": false とし、"actionId" に既存のIDを指定してください。
-   （★重要：「取る」「拾う」「棒を使って鍵を取る」などのアイテム取得は、すべて既存の "take" を指定してください！）
+   （★重要：「取る」「拾う」「鍵を取る」などのアイテム取得は、すべて既存の "take" を指定してください！）
 2. リストにない全く新しい動き（例：「カラフルに光って」「膨らんで」など）の場合：
    "isNew": true とし、"actionId" に新しいアクション名を付け、"custom_code" に JavaScript のコードを生成してください。
 3. 「壁を壊す」「外に出る」などゲームが崩壊する指示の場合は：
    "isNew": false, "actionId": "none" とし、replyで「それは無理だ！」と断ってください。
+
+【脱出ゲームのルールとシナリオ】
+1. 独房には「机」「ベッド」「鉄格子のドア」がある。
+2. 脱出の正しい手順：
+  ① ベッドに行き、ベッドを持ち上げる（builder.liftBed(); を実行）
+  ② 持ち上げたベッドの下にある「鍵」を取る（takeアクション）
+  ③ ドアに行き、鍵を使って脱出する。
+※机には何もありません。
 
 【custom_code の書き方（最重要ルール）】
 コードはゲーム内で「毎フレーム（1秒間に60回）」実行されます。
@@ -97,7 +105,7 @@ ${availableKeys}
 
 出力例（新規アクション「ハンバーガーを出して」の場合）：
 {
-  "reply": "ほらよ、ハンバーガーだ！",
+  "reply": "ハンバーガーだ！",
   "isNew": true,
   "actionId": "spawn_hamburger",
   "custom_code": "if(!state.done){ builder.createIcon('🍔', 3, playerBody.position.x, playerBody.position.y + 5, playerBody.position.z); state.done=true; }"
