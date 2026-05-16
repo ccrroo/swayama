@@ -48,12 +48,34 @@ connectDB();
 
 app.post('/api/chat', async(req, res) => {
     try {
-        const { userInput, gameState } = req.body;
+        // ★ 変更：ゲーム側から「type（誰への指示か）」を受け取る
+        const { type, userInput, gameState } = req.body;
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        let systemPrompt = "";
 
         const availableKeys = Object.keys(actionCache).join(", ");
 
-        const systemPrompt = `あなたは監獄の独房に閉じ込められたかよわい男の子「Swataro」です。
+        // =========================================================
+        // ★ AIの人格スイッチ（監視員 or Swataro）
+        // =========================================================
+        if (type === "guard_check") {
+            // モード1：監視員が部屋を覗いた時の反応
+            systemPrompt = `あなたは刑務所の恐ろしい監視員です。部屋をスキャンしました。
+【現在の部屋の状況】${gameState}
+この状況を見て、怪しい点（ベッドが不自然に宙に浮いている、囚人が鍵を持っている等）があれば厳しく指摘してください。
+怪しい点がなければ「異常なし。」と一言だけ言ってください。
+出力形式 (JSON): {"reply": "セリフ", "isSuspicious": true/false}`;
+            
+        } else if (type === "guard_judge") {
+            // モード2：言い訳を評価する監視員
+            systemPrompt = `あなたは刑務所の恐ろしい監視員です。部屋の異常について囚人が以下の言い訳をしました。
+【言い訳】「${userInput}」
+これが論理的で納得できる、あるいは面白くてつい許してしまうような内容なら passed を true にしてください。ふざけすぎや意味不明なら false です。
+出力形式 (JSON): {"reply": "セリフ", "passed": true/false}`;
+            
+        } else {
+            // モード3：いつものSwataro（元のプロンプトを完全維持 ＋ 証拠隠滅ルールの追加）
+            systemPrompt = `あなたは監獄の独房に閉じ込められたかよわい男の子「Swataro」です。
 プレイヤーの指示から意図を汲み取り、以下のJSON形式で返答してください。
 
 【現在のあなたの状況（絶対忘れないでください）】
@@ -102,7 +124,9 @@ ${availableKeys}
 - 四角形: builder.createBox(幅, 高さ, 奥行き, 0xRRGGBB, x, y, z);
 - 球体: builder.createSphere(半径, 0xRRGGBB, x, y, z);
 - アイコン: builder.createIcon("🍔", サイズ, x, y, z); // 食べ物や動物、道具などを要求されたら、最適な「絵文字」を選んで召喚してください！
-【ベッドを持ち上げる】: builder.liftBed();
+【ベッドの操作】
+- 持ち上げる: builder.liftBed();
+- 下ろす（証拠隠滅）: builder.dropBed(); // ★追加：監視員が来る前にベッドを下ろすよう指示されたら使ってください。
 
 出力例（新規アクション「ハンバーガーを出して」の場合）：
 {
@@ -112,6 +136,7 @@ ${availableKeys}
   "custom_code": "if(!state.done){ builder.createIcon('🍔', 3, playerBody.position.x, playerBody.position.y + 5, playerBody.position.z); state.done=true; }"
 }
 `;
+        }
 
         const model = genAI.getGenerativeModel({
             model: "gemini-3.1-flash-lite-preview",
@@ -119,23 +144,38 @@ ${availableKeys}
             generationConfig: { responseMimeType: "application/json" }
         });
 
-        const result = await model.generateContent(userInput);
+        // 監視員がチェックする時はユーザーの入力（指示）がないのでダミーのテキストを渡す
+        const textToProcess = userInput || "状況を確認しろ";
+        const result = await model.generateContent(textToProcess);
         const aiData = JSON.parse(result.response.text());
 
-        let codeToExecute = "";
+        // =========================================================
+        // ★ 分岐：Swataroの時だけコードを生成・保存する
+        // =========================================================
+        if (!type || type === "swataro") {
+            let codeToExecute = "";
 
-        if (aiData.isNew && aiData.custom_code) {
-            codeToExecute = aiData.custom_code;
-            actionCache[aiData.actionId] = aiData.custom_code;
+            if (aiData.isNew && aiData.custom_code) {
+                codeToExecute = aiData.custom_code;
+                actionCache[aiData.actionId] = aiData.custom_code;
 
-            if (actionsCollection) {
-                actionsCollection.updateOne({ _id: aiData.actionId }, { $set: { code: aiData.custom_code, createdAt: new Date() } }, { upsert: true }).catch(err => console.error("MongoDB save error:", err));
+                if (actionsCollection) {
+                    actionsCollection.updateOne(
+                        { _id: aiData.actionId }, 
+                        { $set: { code: aiData.custom_code, createdAt: new Date() } }, 
+                        { upsert: true }
+                    ).catch(err => console.error("MongoDB save error:", err));
+                }
+            } else {
+                codeToExecute = actionCache[aiData.actionId] || "";
             }
-        } else {
-            codeToExecute = actionCache[aiData.actionId] || "";
-        }
 
-        res.json({ reply: aiData.reply, code: codeToExecute });
+            res.json({ reply: aiData.reply, code: codeToExecute });
+            
+        } else {
+            // 監視員の場合は、判定結果（JSON）をそのままゲーム側に返すだけ
+            res.json(aiData);
+        }
 
     } catch (error) {
         console.error("🔥 Server Error:", error.message);
