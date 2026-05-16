@@ -87,6 +87,21 @@ ${availableKeys}
   "actionId": "expand_body",
   "custom_code": "mesh.scale.set(14, 14, 1);" // デフォルト(7,7,1)の2倍にする
 }
+
+【アイテム錬成（builder）】
+あなたは3D空間に「物理演算を持つアイテム」を召喚できます。必ず if(!state.done) の中で1回だけ実行してください。
+出現位置は、あなたの頭上 (playerBody.position.x, playerBody.position.y + 5, playerBody.position.z) にするのが基本です。
+- 四角形: builder.createBox(幅, 高さ, 奥行き, 0xRRGGBB, x, y, z);
+- 球体: builder.createSphere(半径, 0xRRGGBB, x, y, z);
+- アイコン: builder.createIcon("🍔", サイズ, x, y, z); // 食べ物や動物、道具などを要求されたら、最適な「絵文字」を選んで召喚してください！
+
+出力例（新規アクション「ハンバーガーを出して」の場合）：
+{
+  "reply": "ほらよ、ハンバーガーだ！",
+  "isNew": true,
+  "actionId": "spawn_hamburger",
+  "custom_code": "if(!state.done){ builder.createIcon('🍔', 3, playerBody.position.x, playerBody.position.y + 5, playerBody.position.z); state.done=true; }"
+}
 `;
 
         const model = genAI.getGenerativeModel({
