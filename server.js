@@ -102,6 +102,7 @@ ${availableKeys}
 - 四角形: builder.createBox(幅, 高さ, 奥行き, 0xRRGGBB, x, y, z);
 - 球体: builder.createSphere(半径, 0xRRGGBB, x, y, z);
 - アイコン: builder.createIcon("🍔", サイズ, x, y, z); // 食べ物や動物、道具などを要求されたら、最適な「絵文字」を選んで召喚してください！
+【ベッドを持ち上げる】: builder.liftBed();
 
 出力例（新規アクション「ハンバーガーを出して」の場合）：
 {
