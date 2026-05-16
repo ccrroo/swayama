@@ -11,6 +11,17 @@ app.use(express.json());
 // =========================================================
 // ★ AIの記憶（キャッシュ）と MongoDB の連携
 // =========================================================
+
+const CORE_ACTIONS = {
+    "move_desk": "if(!state.done){ target.set(-6, 2, -6); state.done=true; }",
+    // ★修正2：ベッドとの「物理的な摩擦」を避けるため x=4 から x=2 に変更！
+    "move_bed": "if(!state.done){ target.set(2, 2, 8); state.done=true; }", 
+    "move_door": "if(!state.done){ target.set(-8, 2, 0); state.done=true; }",
+    "move_center": "if(!state.done){ target.set(0, 2, 0); state.done=true; }",
+    "jump": "if(!state.done){ velocity.y = 15; state.done=true; }",
+    "take": "if(!state.done){ state.action = 'take'; state.done=true; }",
+    "open": "if(!state.done){ state.action = 'open'; state.done=true; }"
+};
 let actionCache = {
     "move_desk": "if(!state.done){ target.set(-6, 2, -6); state.done=true; }",
     "move_bed": "if(!state.done){ target.set(4, 2, 8); state.done=true; }",
@@ -37,7 +48,9 @@ async function connectDB() {
 
         const learnedActions = await actionsCollection.find({}).toArray();
         learnedActions.forEach(doc => {
-            actionCache[doc._id] = doc.code;
+            if (!CORE_ACTIONS[doc._id]) {
+                actionCache[doc._id] = doc.code;
+            }
         });
         console.log(`✅ Loaded ${learnedActions.length} learned actions from MongoDB.`);
     } catch (e) {
