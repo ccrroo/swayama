@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+//const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { MongoClient } = require('mongodb');
 require('dotenv').config();
 
@@ -63,7 +63,7 @@ app.post('/api/chat', async(req, res) => {
     try {
         // ★ 変更：ゲーム側から「type（誰への指示か）」を受け取る
         const { type, userInput, gameState } = req.body;
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        //const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         let systemPrompt = "";
 
         const availableKeys = Object.keys(actionCache).join(", ");
@@ -163,17 +163,30 @@ ${availableKeys}
 `;
         }
 
-        const model = genAI.getGenerativeModel({
-            model: "gemini-3-flash-preview",
-            systemInstruction: systemPrompt,
-            generationConfig: { responseMimeType: "application/json" }
-        });
+       
 
         // 監視員がチェックする時はユーザーの入力（指示）がないのでダミーのテキストを渡す
         const textToProcess = userInput || "状況を確認しろ";
-        const result = await model.generateContent(textToProcess);
-        const aiData = JSON.parse(result.response.text());
+       const response = await fetch('http://localhost:11434/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: "qwen2.5:7b", // Ollamaでダウンロードしたモデル名
+                system: systemPrompt,
+                prompt: textToProcess,
+                format: "json",      // 確実なJSON出力を強制する強力な機能
+                stream: false
+            })
+        });
 
+        if (!response.ok) {
+            throw new Error(`Ollama API Error: ${response.status} ${response.statusText}`);
+        }
+
+        const ollamaData = await response.json();
+        
+        // OllamaはJSON形式の「文字列」を返すため、オブジェクトに変換
+        const aiData = JSON.parse(ollamaData.response);
         // =========================================================
         // ★ 分岐：Swataroの時だけコードを生成・保存する
         // =========================================================
