@@ -167,7 +167,7 @@ ${availableKeys}
 
         // 監視員がチェックする時はユーザーの入力（指示）がないのでダミーのテキストを渡す
         const textToProcess = userInput || "状況を確認しろ";
-       const response = await fetch('http://localhost:11434/api/generate', {
+       const response = await fetch('http://127.0.0.1:11434/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
