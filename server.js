@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-//const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { MongoClient } = require('mongodb');
 require('dotenv').config();
 
@@ -15,7 +15,7 @@ app.use(express.json());
 const CORE_ACTIONS = {
     "move_desk": "if(!state.done){ target.set(-6, 2, -6); state.done=true; }",
     // ★修正2：ベッドとの「物理的な摩擦」を避けるため x=4 から x=2 に変更！
-    "move_bed": "if(!state.done){ target.set(2, 2, 8); state.done=true; }", 
+    "move_bed": "if(!state.done){ target.set(2, 2, 8); state.done=true; }",
     "move_door": "if(!state.done){ target.set(-8, 2, 0); state.done=true; }",
     "move_center": "if(!state.done){ target.set(0, 2, 0); state.done=true; }",
     "jump": "if(!state.done){ velocity.y = 15; state.done=true; }",
@@ -63,7 +63,7 @@ app.post('/api/chat', async(req, res) => {
     try {
         // ★ 変更：ゲーム側から「type（誰への指示か）」を受け取る
         const { type, userInput, gameState } = req.body;
-        //const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         let systemPrompt = "";
 
         const availableKeys = Object.keys(actionCache).join(", ");
@@ -71,7 +71,7 @@ app.post('/api/chat', async(req, res) => {
         // =========================================================
         // ★ AIの人格スイッチ（監視員 or Swataro）
         // =========================================================
-       if (type === "guard_check") {
+        if (type === "guard_check") {
             // ★変更：監視員が「勝手な想像」をしないように厳格なルールを付与
             systemPrompt = `あなたは刑務所の監視員です。部屋をスキャンしました。
 【現在の部屋の状況】
@@ -88,14 +88,14 @@ ${gameState}
 上記に該当しない場合は、絶対に「異常なし (isSuspicious: false)」とし、replyは「異常なし。」の一言にしてください。
 異常がある場合は、その異常について激怒して追及するセリフをreplyに書いてください。
 出力形式 (JSON): {"reply": "セリフ", "isSuspicious": true/false}`;
-            
+
         } else if (type === "guard_judge") {
             // モード2：言い訳を評価する監視員
             systemPrompt = `あなたは刑務所の恐ろしい監視員です。部屋の異常について囚人が以下の言い訳をしました。
 【言い訳】「${userInput}」
 これが論理的で納得できる、あるいは面白くてつい許してしまうような内容なら passed を true にしてください。ふざけすぎや意味不明なら false です。
 出力形式 (JSON): {"reply": "セリフ", "passed": true/false}`;
-            
+
         } else {
             // モード3：いつものSwataro（元のプロンプトを完全維持 ＋ 証拠隠滅ルールの追加）
             systemPrompt = `あなたは監獄の独房に閉じ込められたかよわい男の子「Swataro」です。
@@ -163,30 +163,17 @@ ${availableKeys}
 `;
         }
 
-       
+        const model = genAI.getGenerativeModel({
+            model: "gemini-3-flash-preview",
+            systemInstruction: systemPrompt,
+            generationConfig: { responseMimeType: "application/json" }
+        });
 
         // 監視員がチェックする時はユーザーの入力（指示）がないのでダミーのテキストを渡す
         const textToProcess = userInput || "状況を確認しろ";
-       const response = await fetch('http://127.0.0.1:11434/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: "qwen2.5:7b", // Ollamaでダウンロードしたモデル名
-                system: systemPrompt,
-                prompt: textToProcess,
-                format: "json",      // 確実なJSON出力を強制する強力な機能
-                stream: false
-            })
-        });
+        const result = await model.generateContent(textToProcess);
+        const aiData = JSON.parse(result.response.text());
 
-        if (!response.ok) {
-            throw new Error(`Ollama API Error: ${response.status} ${response.statusText}`);
-        }
-
-        const ollamaData = await response.json();
-        
-        // OllamaはJSON形式の「文字列」を返すため、オブジェクトに変換
-        const aiData = JSON.parse(ollamaData.response);
         // =========================================================
         // ★ 分岐：Swataroの時だけコードを生成・保存する
         // =========================================================
@@ -198,18 +185,14 @@ ${availableKeys}
                 actionCache[aiData.actionId] = aiData.custom_code;
 
                 if (actionsCollection) {
-                    actionsCollection.updateOne(
-                        { _id: aiData.actionId }, 
-                        { $set: { code: aiData.custom_code, createdAt: new Date() } }, 
-                        { upsert: true }
-                    ).catch(err => console.error("MongoDB save error:", err));
+                    actionsCollection.updateOne({ _id: aiData.actionId }, { $set: { code: aiData.custom_code, createdAt: new Date() } }, { upsert: true }).catch(err => console.error("MongoDB save error:", err));
                 }
             } else {
                 codeToExecute = actionCache[aiData.actionId] || "";
             }
 
             res.json({ reply: aiData.reply, code: codeToExecute });
-            
+
         } else {
             // 監視員の場合は、判定結果（JSON）をそのままゲーム側に返すだけ
             res.json(aiData);
